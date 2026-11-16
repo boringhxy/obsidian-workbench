@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict'),Module=require('node:module');
+const original=Module._load;Module._load=function(id,...rest){return id==='obsidian'?{Plugin:class{},Modal:class{},ItemView:class{},Notice:class{}}:original.call(this,id,...rest)};
+const {makeTask,parseTasks,changeTask,syncMessage}=require('../main.js').core;
+const notes='阅读第3篇文献\n核对原文 <!-- 不可变成元数据 --> 📅 2026-02-30';
+const line=makeTask('核对引文','学术研究','2026-11-17','sample',[],'',[],{time:'00:00',priority:'high',notes})+' <!-- sync:keep -->';
+let task=parseTasks(line)[0];assert.equal(task.time,'00:00');assert.equal(task.title,'核对引文');assert.equal(task.notes,notes);assert.equal(task.priority,'high');
+let edit=changeTask(line,task,{title:'核对脚注',project:'学术研究',date:'2026-11-18',time:'14:35',priority:'low',notes:'新备注'});assert(edit.includes('sync:keep'));assert.equal((edit.match(/📅/gu)||[]).length,1);assert(!edit.includes('00:00'));assert(!edit.includes('⏫'));task=parseTasks(edit)[0];assert.equal(task.time,'14:35');assert.equal(task.priority,'low');assert.equal(task.notes,'新备注');
+let complete=changeTask(edit,task,{done:true});let parsed=parseTasks(complete)[0];assert(parsed.done);assert.equal(parsed.time,'14:35');assert.equal(parsed.notes,'新备注');assert(complete.includes('sync:keep'));
+let clear=changeTask(complete,parsed,{title:parsed.title,project:'学术研究',date:'',time:'',priority:'none',notes:''});parsed=parseTasks(clear)[0];assert.equal(parsed.date,'');assert.equal(parsed.time,'');assert.equal(parsed.notes,'');assert.equal(parsed.priority,'none');assert(parsed.done);assert(clear.includes('sync:keep'));
+for(const time of ['24:00','9:30','00:60','12:3'])assert.throws(()=>makeTask('x','学术研究','2026-11-17','id',[],'',[],{time}));assert.throws(()=>makeTask('x','学术研究','','id',[],'',[],{time:'09:00'}));
+for(const time of ['00:00','09:00','23:59'])assert.equal(parseTasks(makeTask('x','学术研究','2026-11-17','id',[],'',[],{time}))[0].time,time);
+assert.equal(parseTasks('- [ ] 外部编辑 📅️ 2026-11-17T9:05 #方向/英语')[0].time,'09:05');
+assert.throws(()=>changeTask(edit,parseTasks(line)[0],{title:'冲突',project:'学术研究',date:'2026-11-18',time:'12:00'}));
+const config={vaultPath:'/vault',defaultList:'工作台',includeDueTime:true,addReminderAlarm:true};const entry={timestamp:816452321,result:{errorCount:0,isDryRun:false}};const last=(entry.timestamp+978307200)*1000;
+assert(syncMessage(config,entry,last+5000,'/vault').includes('等待'));assert(syncMessage(config,entry,last-1000,'/vault').includes('记录已更新'));assert(!syncMessage(config,entry,last-1000,'/vault').includes('同步成功'));assert(syncMessage({...config,dryRunMode:true},entry,last,'/vault').includes('预览'));assert(syncMessage(config,{...entry,result:{errorCount:1}},last,'/vault').includes('错误'));assert(syncMessage(config,entry,last,'/other').includes('其他知识库'));
+console.log('PASS: 日期时间/午夜/优先级/多行备注、完成与清空、外部标记保留、无效输入、冲突保护和真实/待同步/错误状态');

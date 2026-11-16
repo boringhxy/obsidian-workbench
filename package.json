@@ -1,0 +1,13 @@
+{
+  "name": "obsidian-workbench",
+  "version": "1.4.1",
+  "private": true,
+  "description": "Obsidian 工作台与 Apple Reminders 接入设计",
+  "scripts": {
+    "test": "node tests/core.cjs && node tests/ui.cjs && node tests/details.cjs && node tests/metadata.cjs && python3 -m unittest discover -s tests -p \"test_*.py\"",
+    "build": "python3 scripts/build.py"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,17 @@
+.DS_Store
+node_modules/
+dist/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.obsidian/
+.remindian/
+data.json
+config.json
+profiles.json
+sync_state*.json
+sync_log*.json
+*backups*/
+*.bundle

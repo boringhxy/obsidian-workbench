@@ -1,0 +1,11 @@
+const assert=require('node:assert/strict'),Module=require('node:module');const original=Module._load;
+Module._load=function(id,...rest){return id==='obsidian'?{Plugin:class{},Modal:class{},ItemView:class{},Notice:class{}}:original.call(this,id,...rest)};
+const c=require('../main.js').core;
+const text=c.makeTask('琐事、学生工作','个人管理','2026-11-16','sample',[],'',[],{time:'14:30',notes:'请带材料'});
+const checkbox=text.split('\n').find(l=>l.startsWith('- [ ]'));
+assert(!checkbox.includes('<!--'));assert(!checkbox.includes('sample'));assert(!checkbox.includes('yu-note'));let task=c.parseTasks(text)[0];assert.equal(task.id,'sample');assert.equal(task.notes,'请带材料');assert.equal(task.title,'琐事、学生工作');assert.equal(task.line,1);
+const done=c.changeTask(text,task,{done:true});assert(c.parseTasks(done)[0].done);assert.equal(c.parseTasks(done)[0].notes,'请带材料');assert.equal(done.split('\n').filter(l=>l.includes('<!-- yu:sample -->')).length,1);
+const stale=text.replace(encodeURIComponent('请带材料'),encodeURIComponent('新备注'));assert.throws(()=>c.changeTask(stale,task,{title:'不可覆盖',project:'个人管理',date:'2026-11-16'}),/已变更/);
+const legacy='- [ ] 老格式 #方向/个人管理 📅 2026-11-16 <!-- yu:old -->';const edited=c.changeTask(legacy,c.parseTasks(legacy)[0],{done:true});assert(edited.startsWith('<!-- yu:old -->\n- [x]'));assert.equal(c.parseTasks(edited)[0].id,'old');
+const notesWithoutId=c.changeTask('- [ ] 原任务 #方向/个人管理',c.parseTasks('- [ ] 原任务 #方向/个人管理')[0],{title:'原任务',project:'个人管理',date:'',notes:'新的备注'});assert(c.parseTasks(notesWithoutId)[0].id);assert.equal(c.parseTasks(notesWithoutId)[0].notes,'新的备注');assert(!notesWithoutId.split('\n').find(l=>l.startsWith('- [ ]')).includes('<!--'));
+console.log('PASS: 同步任务行不含内部编号或备注、旧格式兼容、稳定定位、完成和备注编辑、并发备注保护');

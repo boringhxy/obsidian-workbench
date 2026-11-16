@@ -1,0 +1,12 @@
+const demoToday=(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;})();
+let demoText=`---\ntype: 项目\n---\n# 演示数据\n- [ ] 演示：核查论文引文 #方向/论文 📅 ${demoToday} <!-- yu:demo1 -->\n- [ ] 演示：阅读日记材料 #方向/毕业论文 <!-- yu:demo2 -->\n- [x] 演示：英语单词复习 #方向/英语 📅 ${demoToday} <!-- yu:demo3 -->\n- [ ] 演示：韩语跟读 #方向/韩语 📅 ${demoToday} <!-- yu:demo4 -->\n- [ ] 演示：整理个人文件 #方向/个人管理 <!-- yu:demo5 -->\n- [ ] 演示：准备面试 #方向/实习 <!-- yu:demo6 -->\n`;
+let demoData={progress:{'论文':{stage:'演示：论文修改中',next:'核查引文'},'课程':{stage:'演示：第3讲',next:'继续下一讲'}}};
+try{demoText=localStorage.getItem('yuw-preview-tasks-v12')||demoText;demoData=JSON.parse(localStorage.getItem('yuw-preview-data-v12')||'null')||demoData;}catch{}
+const persistDemo=()=>{try{localStorage.setItem('yuw-preview-tasks-v12',demoText);localStorage.setItem('yuw-preview-data-v12',JSON.stringify(demoData));}catch{}};
+const demoEvents=[],demoLeaves=[],demoFactories={};
+const demoApp={vault:{getAbstractFileByPath:p=>p.endsWith('方向与进度.md')?null:{path:p},read:async()=>demoText,process:async(f,fn)=>{demoText=fn(demoText);persistDemo();demoEvents.filter(e=>e.name==='modify').forEach(e=>e.fn(f));},on:(name,fn)=>{demoEvents.push({name,fn});return fn;}},workspace:{getLeavesOfType:()=>demoLeaves,getLeaf:()=>({setViewState:async({type})=>{const leaf={};leaf.view=demoFactories[type](leaf);demoLeaves.push(leaf);await leaf.view.onOpen();}}),revealLeaf:async()=>{},onLayoutReady:fn=>fn(),openLinkText:p=>alert('实际插件会打开库内笔记：'+p)}};
+class DemoView{constructor(){this.app=demoApp;this.containerEl=document.getElementById('mount');this.contentEl=this.containerEl;}}
+class DemoModal{constructor(){this.overlay=document.createElement('div');this.overlay.className='demo-overlay';this.contentEl=document.createElement('div');this.contentEl.className='demo-modal';this.overlay.appendChild(this.contentEl);}open(){document.body.appendChild(this.overlay);this.onOpen();}close(){this.overlay.remove();}}
+class DemoPlugin{constructor(){this.app=demoApp;}async loadData(){return demoData;}async saveData(v){demoData=v;persistDemo();}registerView(t,f){demoFactories[t]=f;}addRibbonIcon(){}addCommand(){}registerEvent(){}registerInterval(){}registerObsidianProtocolHandler(){}}
+class DemoNotice{constructor(message){const t=document.createElement('div');t.className='demo-toast';t.textContent=message;document.body.appendChild(t);setTimeout(()=>t.remove(),4500);}}
+window.require=()=>({Plugin:DemoPlugin,ItemView:DemoView,Modal:DemoModal,Notice:DemoNotice});window.module={exports:{}};
