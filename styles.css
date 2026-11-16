@@ -264,3 +264,6 @@
 @media(max-width:650px){.yuw-sync-status span{flex-basis:100%}.yuw-form .yuw-reminder-schedule{padding:12px}.yuw-quick input[type=time]{flex-basis:110px}}
 
 .yuw-quick-time{display:flex;align-items:center;gap:5px;flex:0 0 auto;color:var(--yu-muted);font-size:11px;white-space:nowrap}
+
+.yuw-sync-auto{display:flex;align-items:center;gap:7px;color:var(--yu-muted);font-size:12px;white-space:normal}
+.yuw-sync-auto input[type=checkbox]{width:16px;height:16px;padding:0;margin:0;flex-shrink:0}

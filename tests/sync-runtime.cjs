@@ -1,0 +1,30 @@
+const assert=require('node:assert/strict'),Module=require('node:module');const original=Module._load;const notices=[];
+Module._load=function(id,...args){return id==='obsidian'?{Plugin:class{},Modal:class{},ItemView:class{},Notice:class{constructor(text){notices.push(text)}}}:original.call(this,id,...args)};
+const Plugin=require('../main.js'),{wakeRemindian,syncMessage,parseTasks}=Plugin.core;
+const config={vaultPath:'/test/vault',taskSourceType:'obsidianTasks',taskDestinationType:'appleReminders',defaultList:'工作台',includedFolders:['工具/个人工作台'],syncedRemindersLists:['工作台'],enableAutoSync:true,enableFileWatcher:true,syncOnLaunch:true,syncIntervalMinutes:1,includeDueTime:true,addReminderAlarm:true};
+const profiles={activeProfileId:'sample',profiles:[{id:'sample',enabled:true,config:{...config}}]};
+function runtime(behavior){const calls=[];return {platform:'darwin',calls,readJSON:async name=>name==='config.json'?config:profiles,run:async(file,args)=>{calls.push({file,args});return behavior(file,args)}}}
+(async()=>{
+ let rt=runtime(()=> '123');assert.equal(await wakeRemindian(rt,config.vaultPath),'running');assert.equal(rt.calls.length,1);
+ rt=runtime(file=>{if(file.endsWith('pgrep'))throw Object.assign(Error('not running'),{code:1})});assert.equal(await wakeRemindian(rt,config.vaultPath),'started');assert.deepEqual(rt.calls[1],{file:'/usr/bin/open',args:['-g','-a','/Applications/Remindian.app']});
+ rt=runtime(()=>{throw Object.assign(Error('denied'),{code:2})});await assert.rejects(wakeRemindian(rt,config.vaultPath),/无法检查/);assert.equal(rt.calls.length,1);
+ rt=runtime(file=>{throw Object.assign(Error('failure'),{code:file.endsWith('pgrep')?1:5})});await assert.rejects(wakeRemindian(rt,config.vaultPath),/未能启动/);
+ rt=runtime(()=>{});await assert.rejects(wakeRemindian(rt,'/another-vault'),/其他知识库/);assert.equal(rt.calls.length,0);
+ rt=runtime(()=>{});rt.readJSON=async name=>name==='config.json'?{...config,dryRunMode:true}:profiles;await assert.rejects(wakeRemindian(rt,config.vaultPath),/预览/);assert.equal(rt.calls.length,0);
+ rt=runtime(()=>{});rt.readJSON=async()=>{throw Object.assign(Error('missing'),{code:'ENOENT'})};assert.equal(await wakeRemindian(rt,config.vaultPath),'not-configured');assert.equal(rt.calls.length,0);
+ rt=runtime(()=>{});rt.platform='linux';assert.equal(await wakeRemindian(rt,config.vaultPath),'unsupported');assert.equal(rt.calls.length,0);
+ const entry={timestamp:816452321,result:{errorCount:0,isDryRun:false}},last=(entry.timestamp+978307200)*1000;
+ assert(syncMessage(config,entry,last+5000,config.vaultPath,last+60000).includes('等待'));
+ assert(syncMessage(config,entry,last+5000,config.vaultPath,last+9*3600000).includes('停滞'));
+ assert(syncMessage(config,entry,last-1000,config.vaultPath,last+9*3600000).includes('最近没有'));
+ assert(syncMessage({...config,enableAutoSync:false},entry,last,config.vaultPath,last+60000).includes('未开启'));
+ let release;rt=runtime(async file=>{if(file.endsWith('pgrep'))await new Promise(resolve=>release=resolve)});
+ const p=new Plugin();p.data={};p.app={vault:{adapter:{getBasePath:()=>config.vaultPath}},workspace:{getLeavesOfType:()=>[]}};p.syncRuntime=rt;
+ const first=p.requestReminderSync(),second=p.requestReminderSync();await new Promise(setImmediate);assert.equal(rt.calls.length,1);release();await Promise.all([first,second]);assert.equal(rt.calls.length,1);
+ let source='<!-- yu:one -->\n- [ ] 示例任务 #方向/个人管理 📅 2030-01-02';const writer=new Plugin();writer.data={directions:[],items:[]};writer.refreshViews=()=>{};
+ writer.app={vault:{getAbstractFileByPath:()=>({}),process:async(file,fn)=>source=fn(source)},workspace:{getLeavesOfType:()=>[]}};
+ writer.syncRuntime=runtime(()=>{throw Object.assign(Error('not available'),{code:2})});await writer.updateTask(parseTasks(source)[0],{done:true});if(writer.syncWake)await writer.syncWake;
+ assert(source.includes('- [x]'));assert(source.includes('✅'));assert(writer.syncLaunchError);assert(notices.some(s=>s.includes('任务已保存，但')));
+ writer.lastSyncWake=0;writer.data.autoLaunchRemindian=false;assert.equal(await writer.requestReminderSync(),'disabled');
+ console.log('PASS: 同步程序退出时后台启动、已运行不重复启动、权限与启动失败、配置范围保护、并发合并、停滞提示；启动失败不影响任务保存');
+})().catch(e=>{console.error(e);process.exit(1)});

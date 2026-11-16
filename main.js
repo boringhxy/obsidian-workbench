@@ -96,7 +96,25 @@ function resolveTasks(source,data){
 }
 function summaryFor(tasks,items,direction){const ts=tasks.filter(t=>t.direction===direction);return {items:items.filter(i=>i.direction===direction),total:ts.length,done:ts.filter(t=>t.done).length,pending:ts.filter(t=>!t.done).length,unassigned:ts.filter(t=>!t.itemId)};}
 
-function syncMessage(config,entry,modifiedMs,vaultPath){
+function validateSyncConfig(config,profiles,vaultPath){
+ const enabled=(profiles.profiles||[]).filter(p=>p.enabled);const active=enabled.find(p=>p.id===profiles.activeProfileId);
+ if(!active||enabled.length!==1)throw Error('请在 Remindian 中只启用当前知识库的工作台配置');
+ for(const c of [config,active.config||{}]){
+  if(!vaultPath||c.vaultPath!==vaultPath)throw Error('同步工具选择了其他知识库，请先核对');
+  if(c.taskSourceType!=='obsidianTasks'||c.taskDestinationType!=='appleReminders'||c.defaultList!=='工作台')throw Error('同步来源或目标清单与工作台不一致');
+  if(c.dryRunMode)throw Error('Remindian 当前是预览模式，不会实际同步');
+  if(!c.enableAutoSync||!c.enableFileWatcher||!c.syncOnLaunch)throw Error('请先开启 Remindian 的自动同步、文件监听和启动同步');
+  if(JSON.stringify(c.includedFolders)!==JSON.stringify([BASE.slice(0,-1)])||JSON.stringify(c.syncedRemindersLists)!==JSON.stringify(['工作台'])||c.globalFilter||c.includedNoteTags?.length)throw Error('同步扫描范围或过滤条件与工作台不一致，请先核对');
+ }
+}
+async function wakeRemindian(runtime,vaultPath){
+ if(runtime.platform!=='darwin')return 'unsupported';
+ let config,profiles;try{config=await runtime.readJSON('config.json');profiles=await runtime.readJSON('profiles.json');}catch(e){if(e.code==='ENOENT')return 'not-configured';throw Error('无法读取同步配置，请在 Remindian 中检查');}
+ validateSyncConfig(config,profiles,vaultPath);
+ try{await runtime.run('/usr/bin/pgrep',['-x','Remindian']);return 'running';}catch(e){if(e.code!==1)throw Error('无法检查同步工具是否运行，请手动打开 Remindian');}
+ try{await runtime.run('/usr/bin/open',['-g','-a','/Applications/Remindian.app']);return 'started';}catch{throw Error('未能启动同步工具，请确认已安装 Remindian 并手动打开');}
+}
+function syncMessage(config,entry,modifiedMs,vaultPath,now=Date.now()){
  if(vaultPath&&config.vaultPath!==vaultPath)return '提醒事项：同步工具选择了其他知识库，请检查。';
  if(config.defaultList!=='工作台')return '提醒事项：目标清单不是“工作台”，请检查。';
  if(config.dryRunMode)return '提醒事项：当前为预览模式，不会实际同步。';
@@ -104,7 +122,11 @@ function syncMessage(config,entry,modifiedMs,vaultPath){
  if(!entry)return '提醒事项：尚无同步记录，请打开 Remindian 完成首次同步。';
  if(entry.result?.errorCount)return '提醒事项：最近一次同步有错误，请打开 Remindian 查看。';
  if(entry.result?.isDryRun)return '提醒事项：最近一次是预览同步，尚未实际写入。';
- const last=(entry.timestamp+978307200)*1000;const label=new Date(last).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+ if(!Number.isFinite(entry.timestamp))return '提醒事项：同步记录缺少有效时间，请打开 Remindian 检查。';
+ const last=(entry.timestamp+978307200)*1000;const label=new Date(last).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});const stale=now-last>Math.max(180000,(config.syncIntervalMinutes||1)*180000);
+ if(config.enableAutoSync===false||config.enableFileWatcher===false)return '提醒事项：自动同步或文件监听未开启，请在 Remindian 中开启。';
+ if(stale&&modifiedMs>last+1000)return '已保存，等待提醒事项更新；同步记录已停滞（上次 '+label+'）。请打开 Remindian，必要时点 Sync Now。';
+ if(stale)return '提醒事项：最近没有新的同步记录（上次 '+label+'），保存任务时会检查同步工具。';
  if(modifiedMs>last+1000)return '已保存，等待提醒事项同步 · 上次 '+label+'。请保持 Remindian 运行。';
  return '同步记录已更新 · '+label+'。可在提醒事项“工作台”清单核对。';
 }
@@ -145,7 +167,7 @@ class TaskModal extends Modal{
  dated.addEventListener('change',()=>{if(dated.checked&&!date.value)date.value=this.view.date;drawSchedule();});timed.addEventListener('change',drawSchedule);time.addEventListener('change',drawSchedule);date.addEventListener('change',()=>{dated.checked=!!date.value;drawSchedule();});drawSchedule();
  const priority=selectField(f,'优先级',Object.entries(PRIORITIES),original.priority||'none','高优先级用于需要优先处理的事情。','任务优先级');
  el(f,'p','yuw-field-help','提醒事项清单：工作台。保存后由 Remindian 同步；请保持 Remindian 运行。');
- const actions=el(f,'div','yuw-actions');button(actions,'取消',()=>this.close());const save=el(actions,'button','yuw-primary',this.task?'保存更改':'添加提醒事项');save.type='submit';f.addEventListener('submit',async e=>{e.preventDefault();save.disabled=true;try{if(!knownDirection(this.plugin.data,direction.value))throw Error('请选择所属方向');const project=this.task&&!item.value&&this.task.direction===direction.value&&!this.task.itemId?this.task.project:direction.value;const patch={title:title.value,project,itemId:item.value,date:dated.checked?date.value:'',time:dated.checked&&timed.checked?time.value:'',priority:priority.value,notes:notes.value};if(this.task)await this.plugin.updateTask(this.task,patch);else await this.plugin.addTask(patch);this.close();new Notice('已保存到知识库，等待提醒事项同步');await this.view.refresh();}catch(e){new Notice(e.message);save.disabled=false;}});title.focus();}
+ const actions=el(f,'div','yuw-actions');button(actions,'取消',()=>this.close());const save=el(actions,'button','yuw-primary',this.task?'保存更改':'添加提醒事项');save.type='submit';f.addEventListener('submit',async e=>{e.preventDefault();save.disabled=true;try{if(!knownDirection(this.plugin.data,direction.value))throw Error('请选择所属方向');const project=this.task&&!item.value&&this.task.direction===direction.value&&!this.task.itemId?this.task.project:direction.value;const patch={title:title.value,project,itemId:item.value,date:dated.checked?date.value:'',time:dated.checked&&timed.checked?time.value:'',priority:priority.value,notes:notes.value};if(this.task)await this.plugin.updateTask(this.task,patch);else await this.plugin.addTask(patch);this.close();new Notice('已保存到知识库');await this.view.refresh();}catch(e){new Notice(e.message);save.disabled=false;}});title.focus();}
 }
 class DirectionModal extends Modal{
  constructor(plugin,view){super(plugin.app);Object.assign(this,{plugin,view});}
@@ -167,7 +189,7 @@ class WorkbenchView extends ItemView{
  for(const [label,id]of [['今日任务','tasks'],['各方向推进','directions'],['项目与学习进度','study']])button(side,label,()=>{if(id==='tasks'){this.date=localDate();this.filter='';this.refresh();}else main.querySelector('#yuw-'+id).scrollIntoView({behavior:'smooth',block:'start'});});
  el(side,'div','yuw-side-bottom');button(side,'知识库',()=>this.app.workspace.openLinkText('首页','',true));button(side,'任务原文',()=>this.app.workspace.openLinkText(TASK_PATH,'',true));
  const main=el(layout,'main','yuw-main');const header=el(main,'header','yuw-header');const heading=el(header,'div');el(heading,'h1','','我的工作台');el(heading,'p','yuw-muted',new Date(this.date+'T12:00:00').toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long'}));button(header,'＋ 添加任务',()=>new TaskModal(this.plugin,this).open(),'yuw-primary');
- const sync=el(main,'div','yuw-sync-status');this.syncLabel=el(sync,'span','',await this.plugin.syncStatus());button(sync,'检查同步',()=>this.updateSyncStatus(),'yuw-edit');button(sync,'打开 Remindian',()=>this.plugin.openSyncApp(),'yuw-edit');
+ const sync=el(main,'div','yuw-sync-status');this.syncLabel=el(sync,'span','',await this.plugin.syncStatus());button(sync,'检查同步',()=>this.updateSyncStatus(),'yuw-edit');button(sync,'打开 Remindian',()=>this.plugin.openSyncApp(),'yuw-edit');const autoLabel=el(sync,'label','yuw-sync-auto');const auto=input(autoLabel,'checkbox','','保存任务时后台启动同步工具');auto.checked=this.plugin.data.autoLaunchRemindian!==false;el(autoLabel,'span','','保存任务时后台启动同步工具');auto.addEventListener('change',()=>this.plugin.writeData(next=>{next.autoLaunchRemindian=auto.checked;}));
  const selected=tasks.filter(t=>(!this.filter||t.category===this.filter));const dated=selected.filter(t=>t.date===this.date),done=dated.filter(t=>t.done).length;const metrics=el(main,'div','yuw-metrics');for(const [label,n]of [['当日任务',dated.length],['已经完成',done],['待完成',dated.length-done]]){const x=el(metrics,'div','yuw-metric');el(x,'span','yuw-muted',label);el(x,'strong','',String(n));}
  const card=el(main,'section','yuw-card');card.id='yuw-tasks';const head=el(card,'div','yuw-section-head');el(head,'h2','',this.date===localDate()?'今日任务':'当日任务');const controls=el(head,'div','yuw-date-controls');button(controls,'‹',()=>{this.date=shiftDate(this.date,-1);this.refresh();}).setAttribute('aria-label','前一天');const date=input(controls,'date',this.date,'选择任务日期');date.addEventListener('change',()=>{if(date.value&&dateOK(date.value)){this.date=date.value;this.refresh();}});button(controls,'›',()=>{this.date=shiftDate(this.date,1);this.refresh();}).setAttribute('aria-label','后一天');button(controls,'今天',()=>{this.date=localDate();this.refresh();},'yuw-edit');
  const week=el(card,'div','yuw-week');const offset=(new Date(this.date+'T12:00:00').getDay()+6)%7;for(let i=0;i<7;i++){const d=shiftDate(this.date,i-offset);const b=button(week,'',()=>{this.date=d;this.refresh();},d===this.date?'selected':'');b.setAttribute('aria-label',d);el(b,'small','','一二三四五六日'[i]);el(b,'strong','',String(Number(d.slice(-2))));el(b,'span','yuw-week-dot',selected.some(t=>t.date===d&&!t.done)?'•':'·');}
@@ -175,7 +197,7 @@ class WorkbenchView extends ItemView{
  const quick=el(card,'form','yuw-quick');const text=input(quick,'text','','快速添加任务');text.required=true;text.placeholder='添加具体任务…';const group=select(quick,groups.map(g=>[directionId(this.plugin.data,g),g]),directionId(this.plugin.data,this.filter||GROUPS[0]));group.setAttribute('aria-label','快速任务方向');
  const project=select(quick,[],'');project.setAttribute('aria-label','快速任务所属项目');const drawQuickProjects=()=>{project.replaceChildren();for(const [value,label]of [['','暂不归入项目'],...this.plugin.data.items.filter(i=>i.direction===group.value).map(i=>[i.id,i.name])]){const option=el(project,'option','',label);option.value=value;}project.value='';};drawQuickProjects();group.addEventListener('change',drawQuickProjects);
  const quickTimeLabel=el(quick,'label','yuw-quick-time');el(quickTimeLabel,'span','','时间（可选）');const quickTime=input(quickTimeLabel,'time','','快速任务时间');quickTime.step='60';quickTime.title='可选：指定当天几点提醒';button(quick,'详情',()=>new TaskModal(this.plugin,this,null,project.value,group.value,{title:text.value,date:this.date,time:quickTime.value,itemId:project.value,direction:group.value}).open(),'yuw-edit');
- const add=el(quick,'button','','＋');add.type='submit';add.setAttribute('aria-label','保存快速任务');quick.addEventListener('submit',async e=>{e.preventDefault();add.disabled=true;try{await this.plugin.addTask({title:text.value,project:group.value,itemId:project.value,date:this.date,time:quickTime.value});new Notice('已保存到知识库，等待提醒事项同步');await this.refresh();}catch(e){new Notice(e.message);add.disabled=false;}});
+ const add=el(quick,'button','','＋');add.type='submit';add.setAttribute('aria-label','保存快速任务');quick.addEventListener('submit',async e=>{e.preventDefault();add.disabled=true;try{await this.plugin.addTask({title:text.value,project:group.value,itemId:project.value,date:this.date,time:quickTime.value});new Notice('已保存到知识库');await this.refresh();}catch(e){new Notice(e.message);add.disabled=false;}});
  const late=selected.filter(t=>!t.done&&t.date&&t.date<this.date);const l=el(card,'label','yuw-overdue');const cb=input(l,'checkbox','','显示此前未完成');cb.checked=this.showOverdue;el(l,'span','',`此前未完成 ${late.length}`);cb.addEventListener('change',()=>{this.showOverdue=cb.checked;this.refresh();});const visible=selected.filter(t=>t.date===this.date||(this.showOverdue&&!t.done&&t.date&&t.date<this.date)).sort((a,b)=>Number(a.done)-Number(b.done)||a.date.localeCompare(b.date)||(a.time||'99:99').localeCompare(b.time||'99:99'));if(!visible.length)el(card,'div','yuw-empty','暂无任务');for(const t of visible)this.taskRow(card,t);
 
  const directions=el(main,'section','yuw-projects');directions.id='yuw-directions';const dh=el(directions,'div','yuw-section-head');el(dh,'h2','','各方向推进');button(dh,'＋ 新建方向',()=>new DirectionModal(this.plugin,this).open(),'yuw-edit');const grid=el(directions,'div','yuw-project-grid');
@@ -209,13 +231,25 @@ class YuWorkbench extends Plugin{
  }
  onunload(){this.stopped=true;}
  async syncStatus(){
-  try{const fs=require('fs'),path=require('path'),os=require('os');const base=path.join(os.homedir(),'Library/Containers/com.remindian.app/Data/Library/Application Support/Remindian');const config=JSON.parse(await fs.promises.readFile(path.join(base,'config.json'),'utf8'));const log=JSON.parse(await fs.promises.readFile(path.join(base,'sync_log.json'),'utf8'));const file=this.app.vault.getAbstractFileByPath(TASK_PATH);return syncMessage(config,log.entries?.[0],file?.stat?.mtime||0,this.app.vault.adapter?.getBasePath?.());}catch{return '提醒事项：暂时无法读取同步记录，请在 Remindian 中检查。';}
+  try{const fs=require('fs'),path=require('path'),os=require('os');const base=path.join(os.homedir(),'Library/Containers/com.remindian.app/Data/Library/Application Support/Remindian');const config=JSON.parse(await fs.promises.readFile(path.join(base,'config.json'),'utf8'));const log=JSON.parse(await fs.promises.readFile(path.join(base,'sync_log.json'),'utf8'));const latest=log.entries?.[0];if(this.syncLaunchError){if(Number.isFinite(latest?.timestamp)&&(latest.timestamp+978307200)*1000>(this.syncLaunchErrorAt||0))this.syncLaunchError='';else return '任务已保存，提醒事项未更新：'+this.syncLaunchError;}const file=this.app.vault.getAbstractFileByPath(TASK_PATH);return syncMessage(config,log.entries?.[0],file?.stat?.mtime||0,this.app.vault.adapter?.getBasePath?.());}catch{return this.syncLaunchError?'任务已保存，提醒事项未更新：'+this.syncLaunchError:'提醒事项：暂时无法读取同步记录，请在 Remindian 中检查。';}
+ }
+ async requestReminderSync(){
+  if(this.data?.autoLaunchRemindian===false||this.stopped)return 'disabled';
+  if(this.syncWake)return this.syncWake;
+  if(this.lastSyncWake&&Date.now()-this.lastSyncWake<5000)return 'cooldown';
+  this.lastSyncWake=Date.now();this.syncLaunchError='';
+  this.syncWake=(async()=>{try{
+   const os=require('os'),fs=require('fs'),path=require('path'),execFile=require('child_process').execFile;const base=path.join(os.homedir(),'Library/Containers/com.remindian.app/Data/Library/Application Support/Remindian');
+   const runtime=this.syncRuntime||{platform:os.platform(),readJSON:async name=>JSON.parse(await fs.promises.readFile(path.join(base,name),'utf8')),run:(file,args)=>new Promise((resolve,reject)=>execFile(file,args,{timeout:4000,maxBuffer:65536},(error,stdout)=>error?reject(error):resolve(stdout)))};
+   const result=await wakeRemindian(runtime,this.app.vault.adapter?.getBasePath?.());if(result==='started')new Notice('已在后台启动同步工具，等待提醒事项更新');return result;
+  }catch(e){this.syncLaunchError=e.message;this.syncLaunchErrorAt=Date.now();new Notice('任务已保存，但提醒事项同步未启动：'+e.message);return 'failed';}})();
+  try{return await this.syncWake;}finally{this.syncWake=null;for(const leaf of this.app.workspace.getLeavesOfType(VIEW))leaf.view.updateSyncStatus?.();}
  }
  async openSyncApp(){try{const electron=require('electron');const shell=electron.shell||electron.remote?.shell;if(!shell)throw Error('无法打开应用');const error=await shell.openPath('/Applications/Remindian.app');if(error)throw Error(error);new Notice('已打开 Remindian；如未自动同步，请点窗口右上角 Sync Now。');}catch{new Notice('请打开“应用程序”中的 Remindian，点击右上角 Sync Now。');}}
  async ensureFile(){const v=this.app.vault;let f=v.getAbstractFileByPath(TASK_PATH);if(f)return f;let p='';for(const part of BASE.slice(0,-1).split('/')){p=p?p+'/'+part:part;if(!v.getAbstractFileByPath(p))await v.createFolder(p);}return v.create(TASK_PATH,'---\ntype: "项目"\ntags:\n  - stage/整理\n  - type/项目\n  - field/数字人文\n---\n# 待办收件箱\n\n## 工作台任务\n');}
  async readTasks(){const f=this.app.vault.getAbstractFileByPath(TASK_PATH);return f?resolveTasks(await this.app.vault.read(f),this.data||{directions:[],items:[]}):[];}
- async addTask(p){const project=this.projectForCategory(p.project);const line=makeTask(p.title,project,p.date,newId('task'),this.data?.directions||[],p.itemId||'',this.data?.items||[],p);this.writes=(this.writes||Promise.resolve()).catch(()=>{}).then(async()=>{const f=await this.ensureFile();await this.app.vault.process(f,text=>text.replace(/\s*$/,'')+(text.includes('## 工作台任务')?'\n':'\n\n## 工作台任务\n')+line+'\n');this.refreshViews();});return this.writes;}
- async updateTask(task,patch){const f=this.app.vault.getAbstractFileByPath(TASK_PATH);if(!f)throw Error('找不到任务源文件');await this.app.vault.process(f,text=>changeTask(text,task,patch,this.data?.directions||[],this.data?.items||[]));this.refreshViews();}
+ async addTask(p){const project=this.projectForCategory(p.project);const line=makeTask(p.title,project,p.date,newId('task'),this.data?.directions||[],p.itemId||'',this.data?.items||[],p);this.writes=(this.writes||Promise.resolve()).catch(()=>{}).then(async()=>{const f=await this.ensureFile();await this.app.vault.process(f,text=>text.replace(/\s*$/,'')+(text.includes('## 工作台任务')?'\n':'\n\n## 工作台任务\n')+line+'\n');this.refreshViews();this.requestReminderSync();});return this.writes;}
+ async updateTask(task,patch){const f=this.app.vault.getAbstractFileByPath(TASK_PATH);if(!f)throw Error('找不到任务源文件');await this.app.vault.process(f,text=>changeTask(text,task,patch,this.data?.directions||[],this.data?.items||[]));this.refreshViews();this.requestReminderSync();}
  projectForCategory(name){return directionId(this.data,name);}
  writeData(mutator){this.preferenceWrites=(this.preferenceWrites||Promise.resolve()).catch(()=>{}).then(async()=>{const next=JSON.parse(JSON.stringify(this.data));const result=mutator(next);await this.saveData(next);this.data=next;this.refreshViews();return result;});return this.preferenceWrites;}
  async createDirection(value){const name=itemName(value);return this.writeData(next=>{if(getGroups(next).some(n=>sameName(n,name)))throw Error('已有同名方向');const id=newId('自定义');next.directions.push({id,name});return id;});}
@@ -229,4 +263,4 @@ class YuWorkbench extends Plugin{
  refreshViews(){for(const l of this.app.workspace.getLeavesOfType(VIEW))l.view.refresh();}
  async open(){if(this.opening)return this.opening;this.opening=(async()=>{let leaf=this.app.workspace.getLeavesOfType(VIEW)[0];if(!leaf){leaf=this.app.workspace.getLeaf('tab');await leaf.setViewState({type:VIEW,active:true});}await this.app.workspace.revealLeaf(leaf);})();try{return await this.opening;}finally{this.opening=null;}}
 }
-module.exports=YuWorkbench;module.exports.core={parseTasks,makeTask,changeTask,localDate,shiftDate,dateOK,groupOf,importProgress,getGroups,getStudies,itemName,GROUPS,STUDIES,migrateData,resolveTasks,summaryFor,directionId,directionName,timeOK,syncMessage};
+module.exports=YuWorkbench;module.exports.core={parseTasks,makeTask,changeTask,localDate,shiftDate,dateOK,groupOf,importProgress,getGroups,getStudies,itemName,GROUPS,STUDIES,migrateData,resolveTasks,summaryFor,directionId,directionName,timeOK,syncMessage,validateSyncConfig,wakeRemindian};
