@@ -15,3 +15,9 @@ sync_state*.json
 sync_log*.json
 *backups*/
 *.bundle
+
+*.local.json
+.cleanup-build/
+targets.json
+清理备份/
+ReminderCleanup/

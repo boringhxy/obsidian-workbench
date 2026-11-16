@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>cleanup-reminders</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.yu.workbench.reminder-cleanup</string>
+	<key>CFBundleName</key>
+	<string>清理误同步提醒</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>仅按你提供的历史同步证据和编号清理误导入提醒，保留正常工作台任务并先备份。</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>仅按你提供的历史同步证据和编号清理误导入提醒，保留正常工作台任务并先备份。</string>
+</dict>
+</plist>

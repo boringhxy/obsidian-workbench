@@ -68,6 +68,7 @@ npm test
 - [版本更新日志](CHANGELOG.md)
 - [贡献与维护约定](CONTRIBUTING.md)
 - [隐私与发布检查](docs/privacy.md)
+- [误同步残留的事故记录与清理工具](docs/incident-reminder-import.md)
 
 Remindian 是独立项目，本仓库不打包其程序、源码、账号配置或运行索引。仓库暂未指定开源许可证；上传到GitHub不等于授予开放使用许可。
 
