@@ -1,9 +1,9 @@
 {
   "id": "yu-workbench",
   "name": "Yu 个人工作台",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "minAppVersion": "1.5.0",
-  "description": "提醒事项式任务录入：日期、时间、优先级、备注与同步状态；支持白天黑夜配色。",
+  "description": "项目开始与目标日期、下一步时间和近期计划；提醒事项式任务管理及白天黑夜配色。",
   "author": "Yu",
   "isDesktopOnly": false
 }

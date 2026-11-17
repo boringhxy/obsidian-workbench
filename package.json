@@ -1,6 +1,6 @@
 {
   "name": "obsidian-workbench",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "private": true,
   "description": "Obsidian 工作台与 Apple Reminders 接入设计",
   "scripts": {

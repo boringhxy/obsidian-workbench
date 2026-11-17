@@ -14,6 +14,26 @@ const getStudies=data=>[...new Set([...STUDIES,...(data?.studyOrder||[]),...Obje
 const groupOf=(p,directions=[])=>directions.find(d=>d.id===p)?.name||(GROUPS.includes(p)?p:GROUPS[LEGACY[p]??2]);
 function itemName(value){const name=clean(value).normalize('NFC');if(!name)throw Error('请填写名称');if(name.length>60)throw Error('名称请控制在60字以内');if(['__proto__','prototype','constructor'].includes(name))throw Error('请换一个名称');return name;}
 const linkOK=url=>!url||/^(https?:\/\/|obsidian:\/\/|\[\[[^\n]+\]\]$)/i.test(url);
+function itemSchedule(record){
+ const fields=['startDate','dueDate','nextDate','nextTime'];const schedule=Object.fromEntries(fields.map(k=>[k,clean(record[k])]));
+ for(const key of ['startDate','dueDate','nextDate'])if(!dateOK(schedule[key]))throw Error('请选择有效的计划日期');
+ if(!timeOK(schedule.nextTime))throw Error('时间请使用24小时制，例如14:30');
+ if(schedule.nextTime&&!schedule.nextDate)throw Error('请先设置下一步完成日期，再设置时间');
+ if((schedule.nextDate||schedule.nextTime)&&!clean(record.next))throw Error('请填写下一步要完成什么');
+ if(schedule.startDate&&schedule.dueDate&&schedule.startDate>schedule.dueDate)throw Error('目标完成日期不能早于开始日期');
+ if(schedule.nextDate&&schedule.startDate&&schedule.nextDate<schedule.startDate)throw Error('下一步完成日期不能早于开始日期');
+ if(schedule.nextDate&&schedule.dueDate&&schedule.nextDate>schedule.dueDate)throw Error('下一步完成日期不能晚于项目目标完成日期');
+ return schedule;
+}
+function deadlineLabel(date,time='',now=new Date()){
+ const today=localDate(now);const days=Math.round((new Date(date+'T12:00:00')-new Date(today+'T12:00:00'))/86400000);
+ const late=days<0||(days===0&&time&&time<`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`);
+ return {late:!!late,soon:!late&&days<=7,text:days<0?`已过目标日期 ${-days} 天`:late?'已过计划时间':days===0?'今天到期':days===1?'明天到期':`还有 ${days} 天`};
+}
+function plannedEntries(items){return items.flatMap(item=>[
+ ...(item.next&&item.nextDate?[{item,kind:'下一步',title:item.next,date:item.nextDate,time:item.nextTime||''}]:[]),
+ ...(item.dueDate?[{item,kind:'项目目标',title:item.name,date:item.dueDate,time:''}]:[])
+ ]).sort((a,b)=>a.date.localeCompare(b.date)||(a.time||'23:59').localeCompare(b.time||'23:59')||a.item.name.localeCompare(b.item.name));}
 function parseTasks(text,directions=[]){let heading='',fence=false;const out=[],lines=text.split('\n');lines.forEach((raw,line)=>{
  if(/^\s*(```|~~~)/.test(raw)){fence=!fence;return;}if(fence)return;
  if(/^## /.test(raw))heading=raw.slice(3).trim();const m=raw.match(/^(\s*-\s+\[([ xX])\]\s+)(.*)$/);if(!m)return;
@@ -146,6 +166,11 @@ function progressExamples(name=''){
 
 function formField(parent,labelText,value,placeholder,description,aria=labelText){const id='yuw-field-'+(++fieldSequence);const label=el(parent,'label','yuw-field-label',labelText);label.setAttribute('for',id);const field=input(parent,'text',value,aria);field.id=id;field.placeholder=placeholder;if(description){const help=el(parent,'p','yuw-field-help',description);help.id=id+'-help';field.setAttribute('aria-describedby',help.id);}return field;}
 function selectField(parent,labelText,options,value,description,aria=labelText){const id='yuw-field-'+(++fieldSequence);const label=el(parent,'label','yuw-field-label',labelText);label.setAttribute('for',id);const field=select(parent,options,value);field.id=id;field.setAttribute('aria-label',aria);if(description){const p=el(parent,'p','yuw-field-help',description);p.id=id+'-help';field.setAttribute('aria-describedby',p.id);}return field;}
+function dateField(parent,label,value,description){const field=formField(parent,label,value,'',description,label);field.type='date';return field;}
+function renderDeadline(parent,label,date,time=''){
+ const status=deadlineLabel(date,time);const line=el(parent,'p','yuw-plan-date'+(status.late?' yuw-late':status.soon?' yuw-plan-soon':''));
+ el(line,'span','',label+'：'+date+(time?' '+time:''));el(line,'strong','',status.text);return line;
+}
 class TaskModal extends Modal{
  constructor(plugin,view,task=null,itemId='',direction='',initial={}){super(plugin.app);Object.assign(this,{plugin,view,task,itemId,direction,initial});}
  onOpen(){const r=this.contentEl;const explain=prepareForm(r,'先写要做的事，再按需要设置日期、具体时间和优先级。');el(r,'h2','',this.task?'提醒事项详情':'新建提醒事项');explain();const f=el(r,'form');const original=this.task||this.initial;
@@ -175,9 +200,15 @@ class DirectionModal extends Modal{
 }
 class ItemModal extends Modal{
  constructor(plugin,view,item=null,direction=''){super(plugin.app);Object.assign(this,{plugin,view,item,direction});}
- onOpen(){const r=this.contentEl;const explain=prepareForm(r,'项目或学习事项是一件需要持续推进的事，例如“日记研究”或“延世韩国语”。这里记录做到哪里；保存后可在项目卡片中添加具体任务。');el(r,'h2','',this.item?'编辑项目与进度':'新建项目／学习事项');explain();const f=el(r,'form');const examples=progressExamples(this.item?.name);const name=formField(f,'项目／学习事项名称（必填）',this.item?.name,'例如：日记研究、延世韩国语','填写具体研究项目、课程或学习内容，例如“民国女中教育论文”“延世韩国语1”，便于和其他项目区分。','名称');name.required=true;name.maxLength=60;
+ onOpen(){const r=this.contentEl;const explain=prepareForm(r,'项目或学习事项是一件需要持续推进的事，例如“日记研究”或“延世韩国语”。这里记录做到哪里、计划何时完成；保存后可在项目卡片中添加具体任务。');el(r,'h2','',this.item?'编辑项目与进度':'新建项目／学习事项');explain();const f=el(r,'form');const examples=progressExamples(this.item?.name);const name=formField(f,'项目／学习事项名称（必填）',this.item?.name,'例如：日记研究、延世韩国语','填写具体研究项目、课程或学习内容，例如“民国女中教育论文”“延世韩国语1”，便于和其他项目区分。','名称');name.required=true;name.maxLength=60;
  const direction=selectField(f,'所属方向（必选）',[['','请选择方向'],...getGroups(this.plugin.data).map(g=>[directionId(this.plugin.data,g),g])],this.item?this.item.direction:this.direction,'选择这个项目属于哪个大类。保存后，项目及其任务会一起计入该方向的汇总。','项目所属方向');direction.required=true;
- const stage=formField(f,'当前进度（可选）',this.item?.stage,examples[0],'记录已做到哪里、哪些部分仍未完成，方便下次接着做。这里由你记录，任务完成数量会自动统计。','当前进度');const next=formField(f,'下一步（可选）',this.item?.next,examples[1],'写下下一轮的推进计划。这段文字不会自动变成待办；需要日期或勾选时，请另用“＋ 任务”添加。','下一步');const link=formField(f,'资料或课程入口（可选）',this.item?.link,'[[笔记名]] 或 https://…','粘贴课程、文稿或资料网页地址；也可填写 [[英语笔记]] 这样的库内链接。保存后点击“打开资料”即可进入。没有链接可留空。','资料或课程入口');const a=el(f,'div','yuw-actions');button(a,'取消',()=>this.close());const save=el(a,'button','yuw-primary',this.item?'保存项目':'新建项目');save.type='submit';f.addEventListener('submit',async e=>{e.preventDefault();save.disabled=true;try{const id=await this.plugin.saveItem({id:this.item?.id,name:name.value,direction:direction.value,stage:stage.value,next:next.value,link:link.value});this.view.projectDirection=direction.value;this.view.itemFilter=id;this.close();await this.view.refresh();}catch(e){new Notice(e.message);save.disabled=false;}});name.focus();}
+ const dates=el(f,'fieldset','yuw-plan-fields');el(dates,'legend','','项目时间（可选）');const dateGrid=el(dates,'div','yuw-plan-grid');
+ const startWrap=el(dateGrid,'div'),dueWrap=el(dateGrid,'div');
+ const startDate=dateField(startWrap,'开始日期',this.item?.startDate,'准备从哪一天开始推进，可留空。');const dueDate=dateField(dueWrap,'目标完成日期',this.item?.dueDate,'整个项目或这门课程计划在哪一天完成。');
+ const stage=formField(f,'当前进度（可选）',this.item?.stage,examples[0],'记录已做到哪里、哪些部分仍未完成，方便下次接着做。这里由你记录，任务完成数量会自动统计。','当前进度');const next=formField(f,'下一步（可选）',this.item?.next,examples[1],'写下下一轮要完成什么，并在下方安排完成时间。保存后会显示在项目卡片和近期计划中。','下一步');const nextGrid=el(f,'div','yuw-plan-grid');const nextDateWrap=el(nextGrid,'div'),nextTimeWrap=el(nextGrid,'div');
+ const nextDate=dateField(nextDateWrap,'下一步完成日期',this.item?.nextDate,'例如：这周五完成第一课。');const nextTime=formField(nextTimeWrap,'具体时间（可选）',this.item?.nextTime,'','按需要设置几点完成；留空则按全天显示。','下一步完成时间');nextTime.type='time';nextTime.step='60';
+ const dateLimits=()=>{dueDate.min=startDate.value;nextDate.min=startDate.value;nextDate.max=dueDate.value;};startDate.addEventListener('change',dateLimits);dueDate.addEventListener('change',dateLimits);dateLimits();
+ const link=formField(f,'资料或课程入口（可选）',this.item?.link,'[[笔记名]] 或 https://…','粘贴课程、文稿或资料网页地址；也可填写 [[英语笔记]] 这样的库内链接。保存后点击“打开资料”即可进入。没有链接可留空。','资料或课程入口');const a=el(f,'div','yuw-actions');button(a,'取消',()=>this.close());const save=el(a,'button','yuw-primary',this.item?'保存项目':'新建项目');save.type='submit';f.addEventListener('submit',async e=>{e.preventDefault();save.disabled=true;try{const id=await this.plugin.saveItem({id:this.item?.id,name:name.value,direction:direction.value,stage:stage.value,next:next.value,link:link.value,startDate:startDate.value,dueDate:dueDate.value,nextDate:nextDate.value,nextTime:nextTime.value});this.view.projectDirection=direction.value;this.view.itemFilter=id;this.close();await this.view.refresh();}catch(e){new Notice(e.message);save.disabled=false;}});name.focus();}
 }
 class WorkbenchView extends ItemView{
  constructor(leaf,plugin){super(leaf);this.plugin=plugin;this.date=localDate();this.filter='';this.showOverdue=false;this.projectDirection='';this.itemFilter='';this.queue=Promise.resolve();}
@@ -200,10 +231,14 @@ class WorkbenchView extends ItemView{
  const add=el(quick,'button','','＋');add.type='submit';add.setAttribute('aria-label','保存快速任务');quick.addEventListener('submit',async e=>{e.preventDefault();add.disabled=true;try{await this.plugin.addTask({title:text.value,project:group.value,itemId:project.value,date:this.date,time:quickTime.value});new Notice('已保存到知识库');await this.refresh();}catch(e){new Notice(e.message);add.disabled=false;}});
  const late=selected.filter(t=>!t.done&&t.date&&t.date<this.date);const l=el(card,'label','yuw-overdue');const cb=input(l,'checkbox','','显示此前未完成');cb.checked=this.showOverdue;el(l,'span','',`此前未完成 ${late.length}`);cb.addEventListener('change',()=>{this.showOverdue=cb.checked;this.refresh();});const visible=selected.filter(t=>t.date===this.date||(this.showOverdue&&!t.done&&t.date&&t.date<this.date)).sort((a,b)=>Number(a.done)-Number(b.done)||a.date.localeCompare(b.date)||(a.time||'99:99').localeCompare(b.time||'99:99'));if(!visible.length)el(card,'div','yuw-empty','暂无任务');for(const t of visible)this.taskRow(card,t);
 
+ const plans=el(main,'section','yuw-card yuw-plans');const ph=el(plans,'div','yuw-section-head');el(ph,'h2','','近期计划');el(plans,'p','yuw-small','显示已过期及未来7天的项目目标和下一步安排。');
+ const entries=plannedEntries(this.plugin.data.items).filter(e=>e.date<=shiftDate(localDate(),7));
+ if(!entries.length)el(plans,'p','yuw-small','暂无近期计划。在“编辑项目与进度”中设置目标完成日期或下一步完成日期。');
+ for(const entry of entries){const plan=el(plans,'div','yuw-plan-row');const detail=el(plan,'div');el(detail,'div','yuw-plan-title',entry.item.name+' · '+entry.kind+'：'+entry.title);renderDeadline(detail,'计划完成',entry.date,entry.time);button(plan,'查看项目',async()=>{this.projectDirection=entry.item.direction;this.itemFilter=entry.item.id;await this.refresh();this.contentEl.querySelector('#yuw-study')?.scrollIntoView({behavior:'smooth',block:'start'});},'yuw-edit');}
  const directions=el(main,'section','yuw-projects');directions.id='yuw-directions';const dh=el(directions,'div','yuw-section-head');el(dh,'h2','','各方向推进');button(dh,'＋ 新建方向',()=>new DirectionModal(this.plugin,this).open(),'yuw-edit');const grid=el(directions,'div','yuw-project-grid');
  for(const g of groups){const direction=directionId(this.plugin.data,g);const summary=summaryFor(tasks,this.plugin.data.items,direction);const p=el(grid,'article','yuw-card yuw-direction');const h=el(p,'div','yuw-section-head');el(h,'h3','',g);button(h,'＋ 项目',()=>new ItemModal(this.plugin,this,null,direction).open(),'yuw-edit');
  el(p,'p','yuw-direction-counts',`${summary.items.length} 个项目 · ${summary.pending} 项待办 · 已完成 ${summary.done} / ${summary.total}`);const track=el(p,'progress');track.max=Math.max(1,summary.total);track.value=summary.done;track.setAttribute('aria-label',g+'任务完成情况');
- const links=el(p,'div','yuw-item-links');for(const item of summary.items){const b=button(links,'',async()=>{this.projectDirection=direction;this.itemFilter=item.id;await this.refresh();this.contentEl.querySelector('#yuw-study')?.scrollIntoView({behavior:'smooth',block:'start'});},'yuw-item-link');el(b,'span','',item.name);el(b,'small','',item.stage||'未记录进度');}
+ const links=el(p,'div','yuw-item-links');for(const item of summary.items){const b=button(links,'',async()=>{this.projectDirection=direction;this.itemFilter=item.id;await this.refresh();this.contentEl.querySelector('#yuw-study')?.scrollIntoView({behavior:'smooth',block:'start'});},'yuw-item-link');el(b,'span','',item.name);el(b,'small','',[item.stage||'未记录进度',item.nextDate?'下一步 '+item.nextDate:item.dueDate?'目标 '+item.dueDate:''].filter(Boolean).join(' · '));}
  if(!summary.items.length)el(p,'p','yuw-small','暂无项目');
  if(summary.unassigned.length){const loose=el(p,'details','yuw-history');el(loose,'summary','',`未归入项目 ${summary.unassigned.length} 项`);for(const task of summary.unassigned)this.taskRow(loose,task);}
  }
@@ -213,7 +248,8 @@ class WorkbenchView extends ItemView{
  const rows=el(study,'div','yuw-project-grid');const visibleItems=this.plugin.data.items.filter(i=>(!this.projectDirection||(this.projectDirection==='__unclassified'?!i.direction:i.direction===this.projectDirection))&&(!this.itemFilter||i.id===this.itemFilter));
  if(!visibleItems.length)el(rows,'div','yuw-empty','暂无项目');
  for(const item of visibleItems){const row=el(rows,'article','yuw-card yuw-project');row.setAttribute('data-item-id',item.id);const h=el(row,'div','yuw-section-head');el(h,'h3','',item.name);const actions=el(h,'div','yuw-project-actions');button(actions,'编辑项目与进度',()=>new ItemModal(this.plugin,this,item).open(),'yuw-edit');button(actions,item.direction?'＋ 任务':'选择所属方向',()=>item.direction?new TaskModal(this.plugin,this,null,item.id).open():new ItemModal(this.plugin,this,item).open(),'yuw-edit');
- el(row,'p','yuw-project-direction',directionName(this.plugin.data,item.direction));el(row,'p','yuw-stage',item.stage||'未记录进度');if(item.next)el(row,'p','yuw-next','下一步：'+item.next);if(item.link)button(row,'打开资料 ↗',()=>openLink(this.app,item.link),'yuw-link');
+ el(row,'p','yuw-project-direction',directionName(this.plugin.data,item.direction));if(item.startDate)el(row,'p','yuw-small','开始：'+item.startDate);if(item.dueDate)renderDeadline(row,'项目目标',item.dueDate);
+ el(row,'p','yuw-stage',item.stage||'未记录进度');if(item.next){el(row,'p','yuw-next','下一步：'+item.next);if(item.nextDate)renderDeadline(row,'下一步完成',item.nextDate,item.nextTime);if(item.direction)button(row,'安排为任务',()=>new TaskModal(this.plugin,this,null,item.id,item.direction,{title:item.next,date:item.nextDate||'',time:item.nextTime||''}).open(),'yuw-edit');}if(item.link)button(row,'打开资料 ↗',()=>openLink(this.app,item.link),'yuw-link');
  const itemTasks=tasks.filter(t=>t.itemId===item.id),completed=itemTasks.filter(t=>t.done);el(row,'div','yuw-small',`任务完成 ${completed.length} / ${itemTasks.length}`);const track=el(row,'progress');track.max=Math.max(1,itemTasks.length);track.value=completed.length;track.setAttribute('aria-label',item.name+'任务完成情况');
  const list=el(row,'div','yuw-project-tasks');const pending=itemTasks.filter(t=>!t.done).sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999'));if(!pending.length)el(list,'p','yuw-project-empty','暂无待办');for(const task of pending)this.taskRow(list,task);
  if(completed.length){const history=el(row,'details','yuw-history');el(history,'summary','',`已完成 ${completed.length}`);for(const task of completed)this.taskRow(history,task);}
@@ -257,10 +293,10 @@ class YuWorkbench extends Plugin{
   if(!knownDirection(next,record.direction))throw Error('请选择所属方向');
   const index=record.id?next.items.findIndex(i=>i.id===record.id):-1;if(record.id&&index<0)throw Error('项目已变更，请刷新后再编辑');
   if(next.items.some(i=>i.id!==record.id&&i.direction===record.direction&&sameName(i.name,name)))throw Error('这个方向下已有同名项目');
-  const item={...(index>=0?next.items[index]:{}),id:record.id||newId('project'),name,direction:record.direction,stage:clean(record.stage),next:clean(record.next),link};
+  const item={...(index>=0?next.items[index]:{}),id:record.id||newId('project'),name,direction:record.direction,stage:clean(record.stage),next:clean(record.next),link,...itemSchedule({...((index>=0)?next.items[index]:{}),...record})};
   if(index>=0)next.items[index]=item;else next.items.push(item);return item.id;
  });}
  refreshViews(){for(const l of this.app.workspace.getLeavesOfType(VIEW))l.view.refresh();}
  async open(){if(this.opening)return this.opening;this.opening=(async()=>{let leaf=this.app.workspace.getLeavesOfType(VIEW)[0];if(!leaf){leaf=this.app.workspace.getLeaf('tab');await leaf.setViewState({type:VIEW,active:true});}await this.app.workspace.revealLeaf(leaf);})();try{return await this.opening;}finally{this.opening=null;}}
 }
-module.exports=YuWorkbench;module.exports.core={parseTasks,makeTask,changeTask,localDate,shiftDate,dateOK,groupOf,importProgress,getGroups,getStudies,itemName,GROUPS,STUDIES,migrateData,resolveTasks,summaryFor,directionId,directionName,timeOK,syncMessage,validateSyncConfig,wakeRemindian};
+module.exports=YuWorkbench;module.exports.core={parseTasks,makeTask,changeTask,localDate,shiftDate,dateOK,groupOf,importProgress,getGroups,getStudies,itemName,GROUPS,STUDIES,migrateData,resolveTasks,summaryFor,directionId,directionName,timeOK,syncMessage,validateSyncConfig,wakeRemindian,itemSchedule,deadlineLabel,plannedEntries};

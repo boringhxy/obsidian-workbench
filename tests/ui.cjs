@@ -17,4 +17,15 @@ const todayRow=walk(root).find(n=>n.attributes['data-task-id']===task.id);await 
 await find(root,'button','＋ 新建方向').listeners.click();modal=lastModal;field(modal.contentEl,'名称').value='运动健康';await submit(modal);await v.refresh();assert(find(root,'h3','运动健康'));
 const next=field(root,'后一天');await next.listeners.click();await v.refresh();assert.equal(v.date,c.shiftDate(today,1));await find(root,'button','今天').listeners.click();await v.refresh();assert.equal(v.date,today);
 const persisted=JSON.parse(JSON.stringify(p.data));const restored=new Plugin();restored.app=p.app;restored.loadData=async()=>persisted;await restored.onload();assert.equal((await restored.readTasks()).find(t=>t.id===task.id).itemId,'paper');assert(c.getGroups(restored.data).includes('运动健康'));assert(notices.every(n=>n.includes('已保存')));
+// Project dates persist without creating tasks or changing reminders.
+const sourceBeforePlan=source;
+await find(card(root,item.id),'button','编辑项目与进度').listeners.click();modal=lastModal;
+field(modal.contentEl,'开始日期').value=c.shiftDate(today,-1);field(modal.contentEl,'目标完成日期').value=c.shiftDate(today,7);
+field(modal.contentEl,'下一步').value='复习第二课';field(modal.contentEl,'下一步完成日期').value=today;field(modal.contentEl,'下一步完成时间').value='23:30';
+await submit(modal);await v.refresh();item=p.data.items.find(i=>i.id===item.id);assert.equal(item.nextDate,today);assert.equal(p.saved.items.find(i=>i.id===item.id).nextTime,'23:30');assert.equal(source,sourceBeforePlan);
+assert(find(root,'h2','近期计划'));assert(walk(root).some(n=>n.textContent==='下一步完成：'+today+' 23:30'));
+await find(card(root,item.id),'button','安排为任务').listeners.click();modal=lastModal;
+assert.equal(field(modal.contentEl,'任务名称').value,'复习第二课');assert.equal(field(modal.contentEl,'任务日期').value,today);assert.equal(field(modal.contentEl,'任务时间').value,'23:30');assert(field(modal.contentEl,'启用任务时间').checked);assert.equal(source,sourceBeforePlan);modal.close();
+await find(card(root,item.id),'button','编辑项目与进度').listeners.click();modal=lastModal;assert.equal(field(modal.contentEl,'下一步完成时间').value,'23:30');
+for(const key of ['开始日期','目标完成日期','下一步完成日期','下一步完成时间'])field(modal.contentEl,key).value='';await submit(modal);await v.refresh();assert.equal(p.data.items.find(i=>i.id===item.id).nextDate,'');assert.equal(source,sourceBeforePlan);assert(!walk(root).some(n=>n.textContent==='下一步完成：'+today+' 23:30'));
 console.log('PASS: 首页与项目同一任务双向勾选、自动汇总、新建项目与任务、编辑所属方向与任务项目即时联动、字段标签、日期与重载保留');})().catch(e=>{console.error(e);process.exit(1)});
